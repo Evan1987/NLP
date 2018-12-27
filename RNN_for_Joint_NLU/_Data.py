@@ -1,5 +1,6 @@
 """
 coding: utf-8
+@date: 2018-12-26
 @author: Cigar
 Tensorflow implementation of "Attention-Based Recurrent Neural Network Models for Joint Intent Detection and Slot Filling"
 ((https://arxiv.org/abs/1609.01454))
@@ -101,13 +102,13 @@ class DataUtils:
         
         return word2index, index2word, tag2index, index2tag, intent2index, index2intent
     
-    def get_batch(self, batch_size):
+    def get_batch(self, batch_size, indexed_data):
         """生成训练batch
         """
-        random.shuffle(self.train_data)
+        random.shuffle(indexed_data)
         index = 0
-        while index + batch_size < len(self.train_data):
-            batch = self.train_data[index: (index + batch_size)]
+        while index + batch_size < len(indexed_data):
+            batch = indexed_data[index: (index + batch_size)]
             index += batch_size
             yield batch
     
