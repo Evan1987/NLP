@@ -22,7 +22,7 @@ test_data_path = path + "dataset/atis-2.dev.w-intent.iob"
 model_path = path + "model/"
 
 data_info = _Data.DataUtils(train_data_path, test_data_path, length=50)
-indexed_train_data  = data_info.to_index(data_info.train_data)  # 4478
+indexed_train_data = data_info.to_index(data_info.train_data)  # 4478
 indexed_test_data = data_info.to_index(data_info.test_data)  # 500
 
 input_length = data_info.length  # 50
@@ -61,8 +61,8 @@ with tf.Session(graph=model.graph, config=config) as sess:
     avg_loss = 0.0
     for epoch in range(epoch_num):
         for batch in data_info.get_batch(batch_size, indexed_train_data):
-            # 执行一个 batch 的训练
-            _, loss, decoder_prediction, intent, mask, slot_w = model.step(sess, "train", batch)
+            # 执行一个 batch 的训练``````````````
+            _, loss, decoder_prediction, intent, mask = model.step(sess, "train", batch)
             avg_loss += loss
             if iteration % 100 == 0:
                 end = time.time()

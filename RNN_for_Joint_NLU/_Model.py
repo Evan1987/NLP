@@ -26,190 +26,209 @@ class Model:
         """构建图"""
         tf.reset_default_graph()
         with self._graph.as_default():
-            # 输入序列
-            self.encoder_inputs = tf.placeholder(dtype=tf.int32,
-                                                 shape=[self.input_length, self.batch_size],
-                                                 name="encoder_inputs")
-            # 输入序列的有效长度
-            self.encoder_inputs_actual_length = tf.placeholder(dtype=tf.int32,
-                                                               shape=[self.batch_size],
-                                                               name="encoder_inputs_actual_length")
-            # 输出序列， 长度与输入序列一致，注意定义时的形状差异
-            self.decoder_targets = tf.placeholder(dtype=tf.int32,
-                                                  shape=[self.batch_size, self.input_length],
-                                                  name="decoder_targets")
 
-            self.intent_targets = tf.placeholder(dtype=tf.int32,
-                                                 shape=[self.batch_size],
-                                                 name="intent_targets")
+            with tf.name_scope("input"):
+                # 输入序列
+                self.encoder_inputs = tf.placeholder(dtype=tf.int32,
+                                                     shape=[self.input_length, self.batch_size],
+                                                     name="encoder_inputs")
+                # 输入序列的有效长度
+                self.encoder_inputs_actual_length = tf.placeholder(dtype=tf.int32,
+                                                                   shape=[self.batch_size],
+                                                                   name="encoder_inputs_actual_length")
+                # 输出序列， 长度与输入序列一致，注意定义时的形状差异
+                self.decoder_targets = tf.placeholder(dtype=tf.int32,
+                                                      shape=[self.batch_size, self.input_length],
+                                                      name="decoder_targets")
+                # intent标签
+                self.intent_targets = tf.placeholder(dtype=tf.int32,
+                                                     shape=[self.batch_size],
+                                                     name="intent_targets")
+            with tf.name_scope("embedding"):
+                # embedding候选
+                self.embeddings = tf.Variable(tf.random_uniform(shape=[self.vocab_size, self.embedding_size],
+                                                                minval=-0.1,
+                                                                maxval=0.1),
+                                              dtype=tf.float32,
+                                              name="embedding")
+                # embeded 输入序列 [input_length, batch_size, embedding_size]
+                self.encoder_inputs_embedded = tf.nn.embedding_lookup(self.embeddings, self.encoder_inputs)
 
-
-            self.embeddings = tf.Variable(tf.random_uniform(shape=[self.vocab_size, self.embedding_size],
-                                                            minval=-0.1,
-                                                            maxval=0.1),
-                                          dtype=tf.float32,
-                                          name="embedding")
-
-            self.encoder_inputs_embedded = tf.nn.embedding_lookup(self.embeddings, self.encoder_inputs)
 
             '''encoder'''
-            encoder_fw_cell_0 = tf.contrib.rnn.LSTMCell(num_units=self.hidden_size)  # forward
-            encoder_bw_cell_0 = tf.contrib.rnn.LSTMCell(num_units=self.hidden_size)  # backward
-            encoder_fw_cell = tf.contrib.rnn.DropoutWrapper(cell=encoder_fw_cell_0, output_keep_prob=0.5)
-            encoder_bw_cell = tf.contrib.rnn.DropoutWrapper(cell=encoder_bw_cell_0, output_keep_prob=0.5)
+            with tf.name_scope("encoder"):
+                # 双向LSTM，大小数量一致
+                encoder_fw_cell_0 = tf.contrib.rnn.LSTMCell(num_units=self.hidden_size)  # forward
+                encoder_bw_cell_0 = tf.contrib.rnn.LSTMCell(num_units=self.hidden_size)  # backward
+                encoder_fw_cell = tf.contrib.rnn.DropoutWrapper(cell=encoder_fw_cell_0, output_keep_prob=0.5)
+                encoder_bw_cell = tf.contrib.rnn.DropoutWrapper(cell=encoder_bw_cell_0, output_keep_prob=0.5)
 
-            # Return (outputs, output_states)
-            # outputs: (output_fw, output_bw)
-            # if time_major == True: (which influences the major axis of output and input required)
-            # output_fw: [max_time, batch_size, cell_fw_num]
-            # output_bw: [max_time, batch_size, cell_bw_num]
-            #
-            # output_states: (output_state_fw, output_state_bw)
-            # output_state_fw.h or c: [batch_size, cell_fw_num]
-            # output_state_bw.h or c: [batch_size, cell_bw_num]
-            (encoder_fw_outputs, encoder_bw_outputs), (encoder_fw_final_state, encoder_bw_final_state) =\
-                tf.nn.bidirectional_dynamic_rnn(cell_fw=encoder_fw_cell,
-                                                cell_bw=encoder_bw_cell,
-                                                inputs=self.encoder_inputs_embedded,
-                                                sequence_length=self.encoder_inputs_actual_length,
-                                                dtype=tf.float32,
-                                                time_major=True)
+                # Return (outputs_of_each_time, output_states_of_final)
+                # outputs_of_each_time: (output_fw, output_bw)
+                # if time_major == True: (which influences the major axis of output and input required)
+                # output_fw: [max_time(input_length), batch_size, cell_fw_num(hidden_size)]
+                # output_bw: [max_time(input_length), batch_size, cell_bw_num(hidden_size)]
+                #
+                # output_states_of_final: final state, (output_state_fw, output_state_bw)
+                # output_state_fw.c or h: [batch_size, cell_fw_num(hidden_size)]
+                # output_state_bw.c or h: [batch_size, cell_bw_num(hidden_size)]
+                (encoder_fw_outputs, encoder_bw_outputs), (encoder_fw_final_state, encoder_bw_final_state) =\
+                    tf.nn.bidirectional_dynamic_rnn(cell_fw=encoder_fw_cell,
+                                                    cell_bw=encoder_bw_cell,
+                                                    inputs=self.encoder_inputs_embedded,
+                                                    sequence_length=self.encoder_inputs_actual_length,
+                                                    dtype=tf.float32,
+                                                    time_major=True)
 
-            # shape: [max_time, batch_size, cell_fw_num + cell_bw_num] => [max_time, batch_size, hidden_size * 2]
-            encoder_outputs = tf.concat([encoder_fw_outputs, encoder_bw_outputs], axis=2)
-            # shape: [batch_size, cell_fw_num + cell_bw_num] => [batch_size, hidden_size * 2]
-            encoder_final_state_c = tf.concat([encoder_fw_final_state.c, encoder_bw_final_state.c], axis=1)
-            # shape: [batch_size, cell_fw_num + cell_bw_num] => [batch_size, hidden_size * 2]
-            encoder_final_state_h = tf.concat([encoder_fw_final_state.h, encoder_bw_final_state.h], axis=1)
-            self.encoder_final_state = tf.contrib.rnn.LSTMStateTuple(
-                c=encoder_final_state_c,
-                h=encoder_final_state_h
-            )
-            print("encoder outputs: ", encoder_outputs)
-            print("encoder outputs[0]: ", encoder_outputs[0])
-            print("encoder final state c: ", encoder_final_state_c)
+                # shape: [max_time(input_length), batch_size, cell_fw_num + cell_bw_num] => [max_time(input_length), batch_size, hidden_size * 2]
+                encoder_outputs = tf.concat([encoder_fw_outputs, encoder_bw_outputs], axis=2)
+
+                # shape: [batch_size, cell_fw_num + cell_bw_num] => [batch_size, hidden_size * 2]
+                encoder_final_state_c = tf.concat([encoder_fw_final_state.c, encoder_bw_final_state.c], axis=1)
+
+                # shape: [batch_size, cell_fw_num + cell_bw_num] => [batch_size, hidden_size * 2]
+                encoder_final_state_h = tf.concat([encoder_fw_final_state.h, encoder_bw_final_state.h], axis=1)  # 为intent预测的输入
+                self.encoder_final_state = tf.contrib.rnn.LSTMStateTuple(
+                    c=encoder_final_state_c,
+                    h=encoder_final_state_h
+                )
+                print("encoder outputs: ", encoder_outputs)  # shape: [input_length, batch_size, hidden_size * 2]
+                print("encoder outputs[0]: ", encoder_outputs[0])  # shape: [batch_size, hidden_size * 2]
+                print("encoder final state c: ", encoder_final_state_c)  # shape: [batch_size, ]
 
 
             '''decoder'''
-            decoder_lengths = self.encoder_inputs_actual_length
-            self.slot_W = tf.Variable(tf.random_uniform(shape=[self.hidden_size * 2, self.slot_size],
-                                                        minval=-1.0,
-                                                        maxval=1.0),
-                                      dtype=tf.float32,
-                                      name="slot_w")
-            self.slot_b = tf.Variable(tf.zeros([1, self.slot_size]), dtype=tf.float32, name="slot_b")
-            intent_W = tf.Variable(tf.random_uniform(shape=[self.hidden_size * 2, self.intent_size],
-                                                     minval=-0.1,
-                                                     maxval=1.0),
-                                   dtype=tf.float32,
-                                   name="intent_w")
-            intent_b = tf.Variable(tf.zeros([1, self.intent_size]), dtype=tf.float32, name="intent_b")
+            # 有效的输入序列长度
+            with tf.name_scope("decoder"):
+                decoder_lengths = self.encoder_inputs_actual_length
 
-            # shape: [batch_size, intent_size]
-            intent_logits = encoder_final_state_h @ intent_W + intent_b
-            # shape: [batch_size, 1]
-            self.intent = tf.argmax(intent_logits, axis=1)
+                with tf.name_scope("intent_pred"):
+                    intent_W = tf.Variable(tf.random_uniform(shape=[self.hidden_size * 2, self.intent_size],
+                                                             minval=-0.1,
+                                                             maxval=1.0),
+                                           dtype=tf.float32,
+                                           name="intent_w")
+                    intent_b = tf.Variable(tf.zeros([1, self.intent_size]), dtype=tf.float32, name="intent_b")
 
-            def initial_fn():
-                """
-                customize sampling for first iter
-                :return: (finished, next_inputs)
-                """
-                initial_elements_finished = (0 >= decoder_lengths)  # all false
-                # shape: [batch_size, embedding_size]
-                sos_step_embedded = tf.nn.embedding_lookup(self.embeddings,
-                                                           tf.constant(value=2, shape=[self.batch_size], dtype=tf.int32))
+                    # shape: [batch_size, intent_size]
+                    intent_logits = encoder_final_state_h @ intent_W + intent_b
+                    # shape: [batch_size, 1]
+                    self.intent = tf.argmax(intent_logits, axis=1)
 
-                # sos_step_embedded: [batch_size, embedding_size]
-                # encoder_outputs[0]: [batch_size, hidden_size * 2]
-                # initial_input: [batch_size, hidden_size * 2 + embedding_size]
-                inital_input = tf.concat([sos_step_embedded, encoder_outputs[0]], axis=1)
-                return initial_elements_finished, inital_input
+                with tf.name_scope("slot_pred"):
+                    # 定义自定义的Helper函数组件
+                    def initial_fn():
+                        """
+                        customize sampling for first iter
+                        :return: (finished, next_inputs)
+                        """
+                        # [batch_size]
+                        initial_elements_finished = (0 >= decoder_lengths)  # all false
+                        # shape: [batch_size, embedding_size]
+                        sos_step_embedded = tf.nn.embedding_lookup(self.embeddings,
+                                                                   tf.constant(value=2, shape=[self.batch_size], dtype=tf.int32))
 
-            def sample_fn(time, outputs, state):
-                """
-                takes (time, outputs, state)
-                :return: sample_ids
-                """
-                # 选择logit最大的下标作为sample
-                prediction_id = tf.to_int32(tf.argmax(outputs, axis=1))
-                return prediction_id
+                        # sos_step_embedded: [batch_size, embedding_size]
+                        # encoder_outputs[0]: [batch_size, hidden_size * 2]
+                        # initial_input: [batch_size, hidden_size * 2 + embedding_size]
+                        inital_input = tf.concat([sos_step_embedded, encoder_outputs[0]], axis=1)
+                        return initial_elements_finished, inital_input
 
-            def next_inputs_fn(time, outputs, state, sample_ids):
-                """
-                callable that takes `(time, outputs, state, sample_ids)`
-                :return: (finished, next_inputs, next_state)
-                """
-                # 上一个时间节点上的输出类别，获取embedding再作为下一个时间节点的输入
-                pred_embedding = tf.nn.embedding_lookup(self.embeddings, sample_ids)
+                    def sample_fn(time, outputs, state):
+                        """
+                        takes (time, outputs, state)
+                        :param outputs: (encoder_outputs[time] @ slot_w + slot_b) shape: [batch_size, slot_size]
+                        # encoder_outputs[time]: [batch_size, hidden_size * 2]
+                        # slot_w: [hidden_size, slot_size]
+                        # slot_b: [slot_size]
+                        :return: sample_ids: [batch_size]
+                        """
+                        # 选择logit最大的下标作为sample
+                        prediction_id = tf.to_int32(tf.argmax(outputs, axis=1))
+                        return prediction_id
 
-                pad_step_embedded = tf.zeros(shape=[self.batch_size, self.hidden_size * 2 + self.embedding_size],
-                                             dtype=tf.float32)
+                    def next_inputs_fn(time, outputs, state, sample_ids):
+                        """
+                        callable that takes `(time, outputs, state, sample_ids)`
+                        :param time: 当前序列时间
+                        :param outputs: outputs
+                        :param sample_ids: 上一时间的输出 [batch_size]
+                        :return: (finished, next_inputs, next_state)
+                        """
+                        # 上一个时间节点上的输出类别，获取embedding再作为下一个时间节点的输入
+                        pred_embedding = tf.nn.embedding_lookup(self.embeddings, sample_ids)
 
-                # pred_embedding: [batch_size, embedding_size]
-                # encoder_outputs[time]: [batch_size, hidden_size * 2]
-                # next_input: [batch_size, embedding_size + hidden_size * 2]
-                next_input = tf.concat([pred_embedding, encoder_outputs[time]], axis=1)
+                        # 结合上一时间的输出和本次encoder的输入,concat
+                        # pred_embedding: [batch_size, embedding_size]
+                        # encoder_outputs[time]: [batch_size, hidden_size * 2]
+                        # next_input: [batch_size, embedding_size + hidden_size * 2]
+                        next_input = tf.concat([pred_embedding, encoder_outputs[time]], axis=1)
 
-                #[batch_size] bool
-                elements_finished = (time >= decoder_lengths)
-                # scalar bool
-                all_finished = tf.reduce_all(elements_finished)
-
-                # like ifelse in R or switch. tf.cond(bool, true_fn, false_fn)
-                # 如果已经全部完成则输入pad值（all 0 tensor），否则进行下一步输入
-                next_inputs = tf.cond(all_finished, lambda: pad_step_embedded, lambda: next_input)
-                next_state = state
-                return elements_finished, next_inputs, next_state
-
-            my_helper = tf.contrib.seq2seq.CustomHelper(initial_fn, sample_fn, next_inputs_fn)
-
-
-            def decode(helper, scope, reuse=None):
-                with tf.variable_scope(scope, reuse=reuse):
-                    # [max_time, batch_size, hidden_size * 2] => [batch_size, max_time, hidden_size * 2]
-                    memory = tf.transpose(encoder_outputs, [1, 0, 2])
-                    attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
-                        num_units=self.hidden_size,
-                        memory=memory,
-                        memory_sequence_length=self.encoder_inputs_actual_length
-                    )
-
-                    cell = tf.contrib.rnn.LSTMCell(num_units=self.hidden_size * 2)
-
-                    attn_cell = tf.contrib.seq2seq.AttentionWrapper(
-                        cell=cell,
-                        attention_mechanism=attention_mechanism,
-                        attention_layer_size=self.hidden_size
-                    )
-
-                    out_cell = tf.contrib.rnn.OutputProjectionWrapper(
-                        cell=attn_cell,
-                        output_size=self.slot_size,
-                        reuse=reuse
-                    )
-
-                    decoder = tf.contrib.seq2seq.BasicDecoder(
-                        cell=out_cell,
-                        helper=helper,
-                        initial_state=out_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size)
-                    )
-                    
-                    final_outputs, final_state, final_sequence_lengths =\
-                        tf.contrib.seq2seq.dynamic_decode(
-                            decoder=decoder, 
-                            output_time_major=True, 
-                            impute_finished=True, 
-                            maximum_iterations=self.input_length
+                        # same as next_inut， 空数据
+                        pad_step_embedded = tf.zeros(
+                            shape=[self.batch_size, self.hidden_size * 2 + self.embedding_size],
+                            dtype=tf.float32
                         )
-                    
-                    return final_outputs
-            
-            outputs = decode(helper=my_helper, scope="decode", reuse=None)
-            print("outputs: ", outputs)
-            print("outputs.rnn_output: ", outputs.rnn_output)
-            print("outputs.sample_id: ", outputs.sample_id)
-            self.decoder_prediction = outputs.sample_id
+                        #[batch_size] bool
+                        elements_finished = (time >= decoder_lengths)
+                        # scalar bool
+                        all_finished = tf.reduce_all(elements_finished)
+
+                        # like ifelse in R or switch. tf.cond(bool, true_fn, false_fn)
+                        # 如果已经全部完成则输入pad值（all 0 tensor），否则进行下一步输入
+                        next_inputs = tf.cond(all_finished, lambda: pad_step_embedded, lambda: next_input)
+                        next_state = state
+                        return elements_finished, next_inputs, next_state
+
+                    my_helper = tf.contrib.seq2seq.CustomHelper(initial_fn, sample_fn, next_inputs_fn)
+
+
+                    def decode(helper, scope, reuse=None):
+                        with tf.variable_scope(scope, reuse=reuse):
+                            # [max_time, batch_size, hidden_size * 2] => [batch_size, max_time, hidden_size * 2]
+                            memory = tf.transpose(encoder_outputs, [1, 0, 2])
+                            attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
+                                num_units=self.hidden_size,
+                                memory=memory,
+                                memory_sequence_length=self.encoder_inputs_actual_length
+                            )
+
+                            # encoder是双向，decoder数量double
+                            cell = tf.contrib.rnn.LSTMCell(num_units=self.hidden_size * 2)
+
+                            attn_cell = tf.contrib.seq2seq.AttentionWrapper(
+                                cell=cell,
+                                attention_mechanism=attention_mechanism,
+                                attention_layer_size=self.hidden_size
+                            )
+
+                            out_cell = tf.contrib.rnn.OutputProjectionWrapper(
+                                cell=attn_cell,
+                                output_size=self.slot_size,
+                                reuse=reuse
+                            )
+
+                            decoder = tf.contrib.seq2seq.BasicDecoder(
+                                cell=out_cell,
+                                helper=helper,
+                                initial_state=out_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size)
+                            )
+
+                            final_outputs, final_state, final_sequence_lengths =\
+                                tf.contrib.seq2seq.dynamic_decode(
+                                    decoder=decoder,
+                                    output_time_major=True,
+                                    impute_finished=True,
+                                    maximum_iterations=self.input_length
+                                )
+
+                            return final_outputs
+
+                    outputs = decode(helper=my_helper, scope="decode", reuse=None)
+                    print("outputs: ", outputs)  # BasicDecoderOutput module
+                    print("outputs.rnn_output: ", outputs.rnn_output)  #
+                    print("outputs.sample_id: ", outputs.sample_id)
+                    self.decoder_prediction = outputs.sample_id
             
             decoder_max_steps, decoder_batch_size, decoder_dim =\
                 tf.unstack(tf.shape(outputs.rnn_output))
@@ -254,8 +273,7 @@ class Model:
 
         sin, true_length, sout, intent = map(np.asarray, list(zip(*indexed_batch)))
         if mode == "train":
-            outfeeds = [self.train_op, self.loss, self.decoder_prediction,
-                        self.intent, self.mask, self.slot_W]
+            outfeeds = [self.train_op, self.loss, self.decoder_prediction, self.intent, self.mask]
             feed_dict = {self.encoder_inputs: np.transpose(sin, [1, 0]),
                          self.encoder_inputs_actual_length: true_length,
                          self.decoder_targets: sout,
