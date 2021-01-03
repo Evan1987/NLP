@@ -26,14 +26,17 @@ class DSSM(KerasModel):
 
         p_context = DSSM.fully_connect(p_embed, 1 - self.keep_prob)
         h_context = DSSM.fully_connect(h_embed, 1 - self.keep_prob)
+        similarity = layers.dot([p_context, h_context], normalize=True, axes=1)
         # cosine similarity [-1, 1] to be prob with softmax: e^x / e^x + e^(1 - x) -> 1 / (1 + e^(-(2x-1)))
         # logit for sigmoid 2x - 1
-        similarity = layers.dot([p_context, h_context], normalize=True, axes=1)
-        prob = layers.Lambda(lambda x: 2.0 * x - 1.0)(similarity)
+        # prob = layers.Lambda(lambda x: 2.0 * x - 1.0)(similarity)
+
+        # simply transform to prob [0, 1]
+        prob = layers.Lambda(lambda x: (x + 1.0) / 2.0)(similarity)
 
         self._model = Model(self.inputs, prob)
         self._model.compile(optimizer=Adam(lr=self.lr), metrics=["accuracy"],
-                            loss=tf.keras.losses.BinaryCrossentropy(from_logits=True))
+                            loss=tf.keras.losses.BinaryCrossentropy(from_logits=False))
 
     @staticmethod
     def fully_connect(x: tf.Tensor, drop_prob: float) -> tf.Tensor:

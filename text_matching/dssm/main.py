@@ -50,15 +50,15 @@ model.save_model(MODEL_FILE)
 
 model.load_model(MODEL_FILE)
 
-similarities = []
+prob = []
 labels = []
 for test_inputs, test_labels in test_data.input_fn(batch_size=100):
-    similarities.append(model.predict(test_inputs))
+    prob.append(model.predict(test_inputs))
     labels.append(test_labels)
 
-similarities = np.vstack(similarities)
+prob = np.vstack(prob)
 labels = np.vstack(labels)
-acc = ((similarities > 0.5).astype(int) == labels).mean()
-loss = K.binary_crossentropy(labels.astype(np.float32), similarities, from_logits=True).numpy().mean()
+acc = ((prob > 0.5).astype(int) == labels).mean()
+loss = K.binary_crossentropy(labels.astype(np.float32), prob, from_logits=False).numpy().mean()
 
-print("Acc: ", acc, " Loss: ", loss)
+print("Acc: ", acc, " Loss: ", loss)        # Acc: 0.6726  Loss: 0.6182
